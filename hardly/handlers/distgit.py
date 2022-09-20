@@ -198,6 +198,7 @@ you should trigger a CI pipeline run via `Pipelines → Run pipeline`."""
             return TaskResults(success=True)
 
         if self.dist_git_pr_model:
+            # There already is a corresponding dist-git MR, let's update it.
             return TaskResults(success=self.handle_existing_dist_git_pr())
 
         if not self.package_config:
@@ -219,24 +220,37 @@ you should trigger a CI pipeline run via `Pipelines → Run pipeline`."""
 
         logger.info(f"About to create a dist-git MR from source-git MR {self.mr_url}")
 
-        if dg_mr := self.sync_release():
-            comment = f"""[Dist-git MR #{dg_mr.id}]({dg_mr.url})
+        dg_mr = self.sync_release()
+        dg_mr_model = PullRequestModel.get_or_create(
+            pr_id=dg_mr.id,
+            namespace=dg_mr.target_project.namespace,
+            repo_name=dg_mr.target_project.repo,
+            project_url=dg_mr.target_project.get_web_url(),
+        )
+        if SourceGitPRDistGitPRModel.get_by_dist_git_id(dg_mr_model.id):
+            logger.error(
+                f"Packit didn't create a new dist-git MR because a MR (#{dg_mr.id}) "
+                "with the same title/description/branch already exists."
+            )
+            return TaskResults(success=False)
+
+        comment = f"""[Dist-git MR #{dg_mr.id}]({dg_mr.url})
 has been created for sake of triggering the downstream checks.
 It ensures that your contribution is valid and can be incorporated in
 dist-git as it is still the authoritative source for the distribution.
 We want to run checks there only so they don't need to be reimplemented in source-git as well."""
-            self.project.get_pr(int(self.mr_identifier)).comment(comment)
+        self.project.get_pr(int(self.mr_identifier)).comment(comment)
 
-            SourceGitPRDistGitPRModel.get_or_create(
-                self.mr_identifier,
-                self.project.namespace,
-                self.project.repo,
-                self.project.get_web_url(),
-                dg_mr.id,
-                dg_mr.target_project.namespace,
-                dg_mr.target_project.repo,
-                dg_mr.target_project.get_web_url(),
-            )
+        SourceGitPRDistGitPRModel.get_or_create(
+            self.mr_identifier,
+            self.project.namespace,
+            self.project.repo,
+            self.project.get_web_url(),
+            dg_mr.id,
+            dg_mr.target_project.namespace,
+            dg_mr.target_project.repo,
+            dg_mr.target_project.get_web_url(),
+        )
 
         return TaskResults(success=True)
 
